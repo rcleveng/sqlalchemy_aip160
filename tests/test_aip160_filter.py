@@ -2,10 +2,9 @@
 
 import pytest
 from datetime import datetime, timezone
-from uuid import UUID
 
 from sqlalchemy import create_engine, String, Integer, Float, Boolean, DateTime, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.pool import StaticPool
 
 from sqlalchemy_aip160.aip160_filter import (
@@ -14,7 +13,6 @@ from sqlalchemy_aip160.aip160_filter import (
     parse_filter,
     FilterError,
     InvalidFieldError,
-    InvalidOperatorError,
 )
 
 

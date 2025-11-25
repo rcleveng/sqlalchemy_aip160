@@ -5,7 +5,7 @@ SQLAlchemy models. It parses filter strings and converts them to SQLAlchemy
 filter expressions.
 
 Usage:
-    from utils.aip160_filter import apply_filter
+    from sqlalchemy_aip160 import apply_filter
 
     query = session.query(MyModel)
     filtered_query = apply_filter(query, MyModel, 'status = "active" AND priority > 5')
@@ -20,8 +20,6 @@ Supported operations:
 
 Reference: https://google.aip.dev/160
 """
-
-from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, TypeVar
@@ -160,11 +158,11 @@ def _coerce_value(column: InstrumentedAttribute, value: Any) -> Any:
 
     # Handle string values that need conversion
     if isinstance(value, str):
-        if python_type == bool:
+        if python_type is bool:
             return value.lower() in ("true", "1", "yes")
-        if python_type == int:
+        if python_type is int:
             return int(value)
-        if python_type == float:
+        if python_type is float:
             return float(value)
         if python_type == UUID:
             return UUID(value)
@@ -241,9 +239,7 @@ class SQLAlchemyTransformer(Transformer):
                 value = value[1:-1]
                 # Handle escape sequences
                 value = (
-                    value.replace('\\"', '"')
-                    .replace("\\'", "'")
-                    .replace("\\\\", "\\")
+                    value.replace('\\"', '"').replace("\\'", "'").replace("\\\\", "\\")
                 )
         return value
 

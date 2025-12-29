@@ -17,18 +17,23 @@ Supported operations:
     - Nested field access: field.subfield
     - Functions: Currently limited (extensible)
     - Wildcards: field = "*.foo" for pattern matching
+    - SQLAlchemy synonyms: filter by synonym names as well as column names
 
 Reference: https://google.aip.dev/160
 """
 
+import logging
 from datetime import datetime
+from functools import lru_cache
 from typing import Any, TypeVar
 from uuid import UUID
 
 from lark import Lark, Transformer
 from lark.exceptions import LarkError, VisitError
-from sqlalchemy import Select, and_, not_, or_
+from sqlalchemy import Select, and_, inspect, not_, or_
 from sqlalchemy.orm import InstrumentedAttribute
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -135,11 +140,10 @@ class InvalidOperatorError(FilterError):
     pass
 
 
+@lru_cache(maxsize=1)
 def _get_parser() -> Lark:
     """Get or create the cached Lark parser."""
-    if not hasattr(_get_parser, "_parser"):
-        _get_parser._parser = Lark(AIP160_GRAMMAR, start="filter", parser="lalr")
-    return _get_parser._parser
+    return Lark(AIP160_GRAMMAR, start="filter", parser="lalr")
 
 
 def _coerce_value(column: InstrumentedAttribute, value: Any) -> Any:
@@ -199,13 +203,29 @@ class SQLAlchemyTransformer(Transformer):
         self._column_map = self._build_column_map()
 
     def _build_column_map(self) -> dict[str, InstrumentedAttribute]:
-        """Build a mapping of field names to SQLAlchemy columns."""
+        """Build a mapping of field names to SQLAlchemy columns, including synonyms."""
         columns = {}
+
+        # Add regular columns
         for name in dir(self.model_class):
             attr = getattr(self.model_class, name)
             if isinstance(attr, InstrumentedAttribute):
                 if self._allowed_fields is None or name in self._allowed_fields:
                     columns[name] = attr
+
+        # Add synonyms - resolve to target column
+        try:
+            mapper = inspect(self.model_class)
+            for syn_name, syn_prop in mapper.synonyms.items():
+                if self._allowed_fields is None or syn_name in self._allowed_fields:
+                    # Get the target column's InstrumentedAttribute
+                    target_attr = getattr(self.model_class, syn_prop.name)
+                    if isinstance(target_attr, InstrumentedAttribute):
+                        columns[syn_name] = target_attr
+        except (AttributeError, TypeError) as e:
+            # Inspection may fail for unmapped classes or unusual configurations
+            logger.debug("Failed to inspect model %s for synonyms: %s", self.model_class, e)
+
         return columns
 
     def _get_column(self, field_path: str) -> InstrumentedAttribute:
@@ -415,7 +435,7 @@ class SQLAlchemyTransformer(Transformer):
         return "*"
 
 
-def parse_filter(filter_string: str) -> Any:
+def parse_filter(filter_string: str | None) -> Any:
     """Parse an AIP-160 filter string into a parse tree.
 
     Args:

@@ -271,9 +271,11 @@ class SQLAlchemyTransformer(Transformer):
         Raises:
             InvalidFieldError: If the field or relationship doesn't exist.
         """
+        parts = field_path.split(".")
+
         # Validate against allowed_fields BEFORE alias resolution
         # This ensures users can only use fields/aliases they're allowed to
-        original_field = field_path.split(".")[0]
+        original_field = parts[0]
         if (
             self._allowed_fields is not None
             and original_field not in self._allowed_fields
@@ -283,10 +285,11 @@ class SQLAlchemyTransformer(Transformer):
                 f"Field '{original_field}' is not allowed. Allowed fields: {available}"
             )
 
-        # Resolve aliases (e.g., "category" -> "category.name")
-        field_path = self._resolve_alias(field_path)
+        # Resolve aliases (e.g., "category" -> "category.name" or "title" -> "name")
+        resolved_path = self._resolve_alias(field_path)
 
-        parts = field_path.split(".")
+        # Re-split after alias resolution (alias may change the path)
+        parts = resolved_path.split(".")
 
         # Simple case - direct column access
         if len(parts) == 1:

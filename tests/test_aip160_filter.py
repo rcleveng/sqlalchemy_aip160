@@ -595,6 +595,16 @@ class RelationshipTestBase(DeclarativeBase):
     pass
 
 
+class Store(RelationshipTestBase):
+    """Store model for multi-level relationship testing."""
+
+    __tablename__ = "rel_stores"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    region: Mapped[str] = mapped_column(String(50))
+
+
 class Category(RelationshipTestBase):
     """Category model for relationship testing."""
 
@@ -603,6 +613,10 @@ class Category(RelationshipTestBase):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    store_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rel_stores.id"), nullable=True
+    )
+    store: Mapped["Store | None"] = relationship()
 
 
 class Item(RelationshipTestBase):
@@ -636,24 +650,28 @@ def rel_sample_data(rel_engine):
     SessionLocal = sessionmaker(bind=rel_engine)
     session = SessionLocal()
 
-    # Create categories
-    electronics = Category(id=1, name="electronics", is_active=True)
-    hardware = Category(id=2, name="hardware", is_active=True)
-    deprecated = Category(id=3, name="deprecated", is_active=False)
+    # Create stores first
+    main_store = Store(id=1, name="Main Store", region="west")
+    outlet = Store(id=2, name="Outlet", region="east")
+    session.add_all([main_store, outlet])
+    session.flush()
+
+    # Create categories with stores
+    electronics = Category(id=1, name="electronics", is_active=True, store_id=1)
+    hardware = Category(id=2, name="hardware", is_active=True, store_id=1)
+    deprecated = Category(id=3, name="deprecated", is_active=False, store_id=None)
     session.add_all([electronics, hardware, deprecated])
 
     # Create items with categories
     items = [
-        Item(id=1, name="Widget A", category_id=1),  # electronics
-        Item(id=2, name="Widget B", category_id=1),  # electronics
-        Item(id=3, name="Gadget X", category_id=2),  # hardware
-        Item(id=4, name="Legacy Y", category_id=3),  # deprecated
+        Item(id=1, name="Widget A", category_id=1),  # electronics -> Main Store
+        Item(id=2, name="Widget B", category_id=1),  # electronics -> Main Store
+        Item(id=3, name="Gadget X", category_id=2),  # hardware -> Main Store
+        Item(id=4, name="Legacy Y", category_id=3),  # deprecated (no store)
     ]
     session.add_all(items)
     session.commit()
     session.close()
-
-    return items
 
 
 @pytest.fixture
@@ -736,6 +754,51 @@ class TestRelationshipFiltering:
         assert len(results) == 1
         assert results[0].name == "Legacy Y"
         assert not results[0].category.is_active
+
+    def test_multi_level_relationship_traversal(self, rel_session):
+        """Deep relationship chains (e.g., category.store.name) should work."""
+        query = select(Item)
+        filtered = apply_filter(query, Item, 'category.store.name = "Main Store"')
+        results = rel_session.execute(filtered).scalars().all()
+        # Items 1, 2, 3 have categories with store "Main Store"; item 4 has no store
+        assert len(results) == 3
+        assert all(r.category.store is not None for r in results)
+        assert all(r.category.store.name == "Main Store" for r in results)
+
+    def test_multi_level_relationship_by_region(self, rel_session):
+        """Can filter by deeply nested field (category.store.region)."""
+        query = select(Item)
+        filtered = apply_filter(query, Item, 'category.store.region = "west"')
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 3
+        assert all(r.category.store.region == "west" for r in results)
+
+    def test_multi_level_relationship_join_count(self):
+        """Multi-level relationship should produce correct number of joins."""
+        expr, joins = build_filter_expression(
+            Item, 'category.store.name = "Main Store"'
+        )
+        # Should have two joins: Item->Category and Category->Store
+        assert len(joins) == 2
+
+    def test_multi_level_with_single_level_combined(self, rel_session):
+        """Can combine multi-level and single-level relationship filters."""
+        query = select(Item)
+        filtered = apply_filter(
+            query,
+            Item,
+            'category.name = "electronics" AND category.store.name = "Main Store"',
+        )
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 2
+        assert all(r.category.name == "electronics" for r in results)
+        assert all(r.category.store.name == "Main Store" for r in results)
+
+    def test_multi_level_invalid_intermediate_relationship(self):
+        """Invalid intermediate relationship should raise error."""
+        with pytest.raises(InvalidFieldError) as exc_info:
+            build_filter_expression(Item, 'category.nonexistent.name = "foo"')
+        assert "nonexistent" in str(exc_info.value).lower()
 
 
 class TestFieldAliases:

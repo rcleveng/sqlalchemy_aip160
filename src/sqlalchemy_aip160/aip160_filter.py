@@ -17,10 +17,12 @@ Supported operations:
     - Nested field access: field.subfield
     - Functions: Currently limited (extensible)
     - Wildcards: field = "*.foo" for pattern matching
+    - SQLAlchemy synonyms: filter by synonym names as well as column names
 
 Reference: https://google.aip.dev/160
 """
 
+import logging
 from datetime import datetime
 from functools import lru_cache
 from typing import Any, TypeVar
@@ -30,6 +32,8 @@ from lark import Lark, Transformer
 from lark.exceptions import LarkError, VisitError
 from sqlalchemy import Select, and_, inspect, not_, or_
 from sqlalchemy.orm import InstrumentedAttribute
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -218,9 +222,9 @@ class SQLAlchemyTransformer(Transformer):
                     target_attr = getattr(self.model_class, syn_prop.name)
                     if isinstance(target_attr, InstrumentedAttribute):
                         columns[syn_name] = target_attr
-        except Exception:
-            # If inspection fails, just use the columns we found
-            pass
+        except (AttributeError, TypeError) as e:
+            # Inspection may fail for unmapped classes or unusual configurations
+            logger.debug("Failed to inspect model %s for synonyms: %s", self.model_class, e)
 
         return columns
 

@@ -37,13 +37,17 @@ class SampleModel(FilterTestBase):
 
 
 class SampleModelWithSynonym(FilterTestBase):
-    """Test model with column synonym for alias testing."""
+    """Test model with column synonym for alias testing.
+
+    Uses `_internal_category` as the Python attribute name and `category` as
+    the public synonym that users filter by.
+    """
 
     __tablename__ = "test_items_with_synonym"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    category_name: Mapped[str] = mapped_column("category", String(50))
-    category = synonym("category_name")  # Alias
+    _internal_category: Mapped[str] = mapped_column("category", String(50))
+    category = synonym("_internal_category")  # Public alias for filtering
 
 
 @pytest.fixture(scope="module")
@@ -492,13 +496,13 @@ class TestSynonymSupport:
         from sqlalchemy_aip160.aip160_filter import SQLAlchemyTransformer
 
         transformer = SQLAlchemyTransformer(SampleModelWithSynonym)
-        assert "category" in transformer._column_map
-        assert "category_name" in transformer._column_map
+        assert "category" in transformer._column_map  # The synonym
+        assert "_internal_category" in transformer._column_map  # The actual attribute
 
     def test_filter_by_synonym(self, session):
         """Should be able to filter using synonym name."""
         # Insert test data
-        item = SampleModelWithSynonym(id=100, category_name="test_cat")
+        item = SampleModelWithSynonym(id=100, _internal_category="test_cat")
         session.add(item)
         session.commit()
 
@@ -509,14 +513,14 @@ class TestSynonymSupport:
         assert results[0].category == "test_cat"
 
     def test_filter_by_target_column(self, session):
-        """Should also be able to filter using target column name."""
+        """Should also be able to filter using the underlying attribute name."""
         query = select(SampleModelWithSynonym)
         filtered = apply_filter(
-            query, SampleModelWithSynonym, 'category_name = "test_cat"'
+            query, SampleModelWithSynonym, '_internal_category = "test_cat"'
         )
         results = session.execute(filtered).scalars().all()
         assert len(results) == 1
-        assert results[0].category_name == "test_cat"
+        assert results[0]._internal_category == "test_cat"
 
     def test_synonym_respects_allowed_fields(self):
         """Synonym should respect allowed_fields whitelist."""
@@ -530,4 +534,44 @@ class TestSynonymSupport:
         with pytest.raises(InvalidFieldError):
             build_filter_expression(
                 SampleModelWithSynonym, 'category = "foo"', allowed_fields={"id"}
+            )
+
+    def test_multiple_synonyms_same_column(self):
+        """Multiple synonyms can point to the same underlying column."""
+        from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, synonym
+
+        class TempBase(DeclarativeBase):
+            pass
+
+        class ModelWithMultipleSynonyms(TempBase):
+            __tablename__ = "multi_syn"
+            id: Mapped[int] = mapped_column(Integer, primary_key=True)
+            _status: Mapped[str] = mapped_column("status", String(50))
+            status = synonym("_status")
+            state = synonym("_status")  # Another alias for the same column
+
+        from sqlalchemy_aip160.aip160_filter import SQLAlchemyTransformer
+
+        transformer = SQLAlchemyTransformer(ModelWithMultipleSynonyms)
+        # All three names should be in the column map
+        assert "_status" in transformer._column_map
+        assert "status" in transformer._column_map
+        assert "state" in transformer._column_map
+        # Both synonyms should resolve to the same underlying column
+        assert transformer._column_map["status"] is transformer._column_map["state"]
+
+    def test_synonym_with_allowed_fields_excludes_target(self):
+        """Synonym can be allowed even if the underlying attribute is not."""
+        # Only allow the synonym, not the internal attribute
+        expr = build_filter_expression(
+            SampleModelWithSynonym, 'category = "foo"', allowed_fields={"category"}
+        )
+        assert expr is not None
+
+        # The internal attribute should not be accessible
+        with pytest.raises(InvalidFieldError):
+            build_filter_expression(
+                SampleModelWithSynonym,
+                '_internal_category = "foo"',
+                allowed_fields={"category"},
             )

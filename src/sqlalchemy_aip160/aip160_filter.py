@@ -189,18 +189,30 @@ def _wildcard_to_like(pattern: str) -> str:
 class SQLAlchemyTransformer(Transformer):
     """Transforms a parsed AIP-160 filter tree into SQLAlchemy expressions."""
 
-    def __init__(self, model_class: type, allowed_fields: set[str] | None = None):
+    def __init__(
+        self,
+        model_class: type,
+        allowed_fields: set[str] | None = None,
+        field_aliases: dict[str, str] | None = None,
+    ):
         """Initialize the transformer.
 
         Args:
             model_class: The SQLAlchemy model class to filter on.
             allowed_fields: Optional set of field names that are allowed in filters.
                            If None, all model columns are allowed.
+            field_aliases: Optional mapping of alias names to actual field paths.
+                          E.g., {"category": "category.name"} allows users to filter
+                          with `category = "x"` which resolves to `category.name = "x"`.
         """
         super().__init__()
         self.model_class = model_class
         self._allowed_fields = allowed_fields
+        self._field_aliases = field_aliases
         self._column_map = self._build_column_map()
+        self._pending_joins: dict[
+            str, InstrumentedAttribute
+        ] = {}  # path -> relationship attr
 
     def _build_column_map(self) -> dict[str, InstrumentedAttribute]:
         """Build a mapping of field names to SQLAlchemy columns, including synonyms."""
@@ -224,30 +236,108 @@ class SQLAlchemyTransformer(Transformer):
                         columns[syn_name] = target_attr
         except (AttributeError, TypeError) as e:
             # Inspection may fail for unmapped classes or unusual configurations
-            logger.debug("Failed to inspect model %s for synonyms: %s", self.model_class, e)
+            logger.debug(
+                "Failed to inspect model %s for synonyms: %s", self.model_class, e
+            )
 
         return columns
 
-    def _get_column(self, field_path: str) -> InstrumentedAttribute:
-        """Get a column from a potentially nested field path."""
+    def _resolve_alias(self, field_name: str) -> str:
+        """Resolve field aliases to actual paths.
+
+        Args:
+            field_name: The field name as specified in the filter.
+
+        Returns:
+            The resolved field path (may be the same if no alias exists).
+        """
+        if self._field_aliases and field_name in self._field_aliases:
+            return self._field_aliases[field_name]
+        return field_name
+
+    def _get_column(self, field_path: str) -> tuple[InstrumentedAttribute, str | None]:
+        """Get a column from a potentially nested field path.
+
+        Supports relationship traversal (e.g., "category.name") and tracks
+        required joins for later application to the query.
+
+        Args:
+            field_path: The field path, optionally with dots for relationships.
+
+        Returns:
+            Tuple of (column, join_path) where join_path is None for direct
+            columns or the relationship path for nested access.
+
+        Raises:
+            InvalidFieldError: If the field or relationship doesn't exist.
+        """
+        # Validate against allowed_fields BEFORE alias resolution
+        # This ensures users can only use fields/aliases they're allowed to
+        original_field = field_path.split(".")[0]
+        if (
+            self._allowed_fields is not None
+            and original_field not in self._allowed_fields
+        ):
+            available = ", ".join(sorted(self._allowed_fields))
+            raise InvalidFieldError(
+                f"Field '{original_field}' is not allowed. Allowed fields: {available}"
+            )
+
+        # Resolve aliases (e.g., "category" -> "category.name")
+        field_path = self._resolve_alias(field_path)
+
         parts = field_path.split(".")
 
-        # For now, only support direct field access
-        # TODO: Support nested relationships
-        if len(parts) > 1:
+        # Simple case - direct column access
+        if len(parts) == 1:
+            field_name = parts[0]
+            if field_name not in self._column_map:
+                available = ", ".join(sorted(self._column_map.keys()))
+                raise InvalidFieldError(
+                    f"Unknown field '{field_name}'. Available fields: {available}"
+                )
+            return self._column_map[field_name], None
+
+        # Relationship traversal (e.g., "category.name" or "category.parent.name")
+        current_model = self.model_class
+        join_path_parts: list[str] = []
+
+        # Walk through relationship chain (all parts except the last)
+        for part in parts[:-1]:
+            rel_attr = getattr(current_model, part, None)
+            if rel_attr is None:
+                raise InvalidFieldError(
+                    f"Unknown field or relationship '{part}' on {current_model.__name__}"
+                )
+
+            # Check if it's a relationship property
+            if not hasattr(rel_attr, "property") or not hasattr(
+                rel_attr.property, "mapper"
+            ):
+                raise InvalidFieldError(
+                    f"'{part}' on {current_model.__name__} is not a relationship"
+                )
+
+            join_path_parts.append(part)
+            join_path = ".".join(join_path_parts)
+
+            # Track this join (deduplication by path)
+            if join_path not in self._pending_joins:
+                self._pending_joins[join_path] = rel_attr
+
+            # Move to the related model
+            current_model = rel_attr.property.mapper.class_
+
+        # Get the final column from the related model
+        final_field = parts[-1]
+        final_column = getattr(current_model, final_field, None)
+
+        if final_column is None or not isinstance(final_column, InstrumentedAttribute):
             raise InvalidFieldError(
-                f"Nested field access '{field_path}' is not yet supported. "
-                "Use direct field names."
+                f"Unknown field '{final_field}' on {current_model.__name__}"
             )
 
-        field_name = parts[0]
-        if field_name not in self._column_map:
-            available = ", ".join(sorted(self._column_map.keys()))
-            raise InvalidFieldError(
-                f"Unknown field '{field_name}'. Available fields: {available}"
-            )
-
-        return self._column_map[field_name]
+        return final_column, ".".join(parts[:-1])
 
     def _parse_value(self, value: Any) -> Any:
         """Parse a value token into its Python representation."""
@@ -318,7 +408,7 @@ class SQLAlchemyTransformer(Transformer):
         """Handle field comparison: field op value."""
         field_path, op, value = items[0], items[1], items[2]
 
-        column = self._get_column(field_path)
+        column, _join_path = self._get_column(field_path)
         value = self._parse_value(value)
         value = _coerce_value(column, value)
 
@@ -461,7 +551,8 @@ def build_filter_expression(
     model_class: type[T],
     filter_string: str,
     allowed_fields: set[str] | None = None,
-) -> Any:
+    field_aliases: dict[str, str] | None = None,
+) -> tuple[Any, list[InstrumentedAttribute]]:
     """Build a SQLAlchemy filter expression from an AIP-160 filter string.
 
     Args:
@@ -469,9 +560,14 @@ def build_filter_expression(
         filter_string: The AIP-160 filter string.
         allowed_fields: Optional set of field names that are allowed in filters.
                        If None, all model columns are allowed.
+        field_aliases: Optional mapping of alias names to actual field paths.
+                      E.g., {"category": "category.name"} allows users to filter
+                      with `category = "x"` which resolves to `category.name = "x"`.
 
     Returns:
-        A SQLAlchemy filter expression that can be passed to .where() or .filter().
+        A tuple of (expression, joins) where:
+        - expression: A SQLAlchemy filter expression for .where() or .filter()
+        - joins: A list of relationship attributes that need to be joined
 
     Raises:
         FilterError: If the filter string is invalid.
@@ -479,11 +575,13 @@ def build_filter_expression(
     """
     tree = parse_filter(filter_string)
     if tree is None:
-        return True  # Empty filter matches everything
+        return True, []  # Empty filter matches everything
 
-    transformer = SQLAlchemyTransformer(model_class, allowed_fields)
+    transformer = SQLAlchemyTransformer(model_class, allowed_fields, field_aliases)
     try:
-        return transformer.transform(tree)
+        expr = transformer.transform(tree)
+        joins = list(transformer._pending_joins.values())
+        return expr, joins
     except VisitError as e:
         # Extract the original exception from Lark's VisitError wrapper
         if e.orig_exc is not None:
@@ -496,6 +594,7 @@ def apply_filter(
     model_class: type[T],
     filter_string: str | None,
     allowed_fields: set[str] | None = None,
+    field_aliases: dict[str, str] | None = None,
 ) -> Select[tuple[T]]:
     """Apply an AIP-160 filter to a SQLAlchemy query.
 
@@ -506,6 +605,9 @@ def apply_filter(
                       the query unchanged.
         allowed_fields: Optional set of field names that are allowed in filters.
                        If None, all model columns are allowed.
+        field_aliases: Optional mapping of alias names to actual field paths.
+                      E.g., {"category": "category.name"} allows users to filter
+                      with `category = "x"` which resolves to `category.name = "x"`.
 
     Returns:
         The filtered query.
@@ -521,12 +623,31 @@ def apply_filter(
         ...     query, User,
         ...     'status = "active" AND created_at > "2024-01-01"'
         ... )
+
+        # With relationship filtering:
+        >>> filtered = apply_filter(
+        ...     query, User,
+        ...     'department.name = "Engineering"'
+        ... )
+
+        # With field aliases:
+        >>> filtered = apply_filter(
+        ...     query, User,
+        ...     'department = "Engineering"',
+        ...     field_aliases={"department": "department.name"}
+        ... )
     """
     if not filter_string or not filter_string.strip():
         return query
 
-    expr = build_filter_expression(model_class, filter_string, allowed_fields)
+    expr, joins = build_filter_expression(
+        model_class, filter_string, allowed_fields, field_aliases
+    )
     if expr is True:
         return query
+
+    # Apply joins first (for relationship traversal)
+    for join_attr in joins:
+        query = query.join(join_attr)
 
     return query.where(expr)

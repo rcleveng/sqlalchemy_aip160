@@ -3,8 +3,17 @@
 import pytest
 from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, String, Integer, Float, Boolean, DateTime, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, synonym
+from sqlalchemy import (
+    create_engine,
+    String,
+    Integer,
+    Float,
+    Boolean,
+    DateTime,
+    select,
+    ForeignKey,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, synonym, relationship
 from sqlalchemy.pool import StaticPool
 
 from sqlalchemy_aip160.aip160_filter import (
@@ -198,15 +207,16 @@ class TestBuildFilterExpression:
     """Tests for building SQLAlchemy expressions."""
 
     def test_empty_filter_returns_true(self):
-        """Empty filter should return True (match everything)."""
-        expr = build_filter_expression(SampleModel, "")
+        """Empty filter should return True (match everything) with empty joins."""
+        expr, joins = build_filter_expression(SampleModel, "")
         assert expr is True
+        assert joins == []
 
     def test_equality_filter(self):
         """Equality filter should build correct expression."""
-        expr = build_filter_expression(SampleModel, 'status = "active"')
+        expr, joins = build_filter_expression(SampleModel, 'status = "active"')
         assert expr is not None
-        # Just verify it builds without error
+        assert joins == []  # No joins for simple column access
 
     def test_invalid_field_raises_error(self):
         """Invalid field should raise InvalidFieldError."""
@@ -217,7 +227,7 @@ class TestBuildFilterExpression:
     def test_allowed_fields_restriction(self):
         """Allowed fields should restrict which fields can be filtered."""
         # Should succeed with allowed field
-        expr = build_filter_expression(
+        expr, joins = build_filter_expression(
             SampleModel, 'status = "active"', allowed_fields={"status", "priority"}
         )
         assert expr is not None
@@ -439,11 +449,12 @@ class TestEdgeCases:
             build_filter_expression(SampleModel, "startsWith(name, 'Widget')")
         assert "not supported" in str(exc_info.value).lower()
 
-    def test_nested_field_not_supported(self):
-        """Nested field access should raise appropriate error."""
+    def test_nested_field_non_relationship_fails(self):
+        """Nested field access on non-relationship should raise error."""
         with pytest.raises(InvalidFieldError) as exc_info:
-            build_filter_expression(SampleModel, 'user.name = "test"')
-        assert "not yet supported" in str(exc_info.value).lower()
+            build_filter_expression(SampleModel, 'status.name = "test"')
+        # 'status' is a string column, not a relationship
+        assert "not a relationship" in str(exc_info.value).lower()
 
     def test_bare_value_not_supported(self):
         """Bare values without field should raise appropriate error."""
@@ -525,10 +536,11 @@ class TestSynonymSupport:
     def test_synonym_respects_allowed_fields(self):
         """Synonym should respect allowed_fields whitelist."""
         # category allowed, should work
-        expr = build_filter_expression(
+        expr, joins = build_filter_expression(
             SampleModelWithSynonym, 'category = "foo"', allowed_fields={"category"}
         )
         assert expr is not None
+        assert joins == []
 
         # category not allowed, should fail
         with pytest.raises(InvalidFieldError):
@@ -563,10 +575,11 @@ class TestSynonymSupport:
     def test_synonym_with_allowed_fields_excludes_target(self):
         """Synonym can be allowed even if the underlying attribute is not."""
         # Only allow the synonym, not the internal attribute
-        expr = build_filter_expression(
+        expr, joins = build_filter_expression(
             SampleModelWithSynonym, 'category = "foo"', allowed_fields={"category"}
         )
         assert expr is not None
+        assert joins == []
 
         # The internal attribute should not be accessible
         with pytest.raises(InvalidFieldError):
@@ -575,3 +588,251 @@ class TestSynonymSupport:
                 '_internal_category = "foo"',
                 allowed_fields={"category"},
             )
+
+
+# Models for relationship testing
+class RelationshipTestBase(DeclarativeBase):
+    pass
+
+
+class Category(RelationshipTestBase):
+    """Category model for relationship testing."""
+
+    __tablename__ = "rel_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Item(RelationshipTestBase):
+    """Item model with relationship for testing."""
+
+    __tablename__ = "rel_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    category_id: Mapped[int] = mapped_column(ForeignKey("rel_categories.id"))
+    category: Mapped[Category] = relationship()
+
+
+@pytest.fixture(scope="module")
+def rel_engine():
+    """Create an in-memory SQLite engine for relationship testing."""
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    RelationshipTestBase.metadata.create_all(engine)
+    return engine
+
+
+@pytest.fixture(scope="module")
+def rel_sample_data(rel_engine):
+    """Insert sample data for relationship testing."""
+    from sqlalchemy.orm import sessionmaker
+
+    SessionLocal = sessionmaker(bind=rel_engine)
+    session = SessionLocal()
+
+    # Create categories
+    electronics = Category(id=1, name="electronics", is_active=True)
+    hardware = Category(id=2, name="hardware", is_active=True)
+    deprecated = Category(id=3, name="deprecated", is_active=False)
+    session.add_all([electronics, hardware, deprecated])
+
+    # Create items with categories
+    items = [
+        Item(id=1, name="Widget A", category_id=1),  # electronics
+        Item(id=2, name="Widget B", category_id=1),  # electronics
+        Item(id=3, name="Gadget X", category_id=2),  # hardware
+        Item(id=4, name="Legacy Y", category_id=3),  # deprecated
+    ]
+    session.add_all(items)
+    session.commit()
+    session.close()
+
+    return items
+
+
+@pytest.fixture
+def rel_session(rel_engine, rel_sample_data):
+    """Create a session for each relationship test."""
+    from sqlalchemy.orm import sessionmaker
+
+    SessionLocal = sessionmaker(bind=rel_engine)
+    session = SessionLocal()
+    yield session
+    session.close()
+
+
+class TestRelationshipFiltering:
+    """Tests for relationship traversal filtering."""
+
+    def test_relationship_traversal_basic(self, rel_session):
+        """Basic relationship traversal should work."""
+        query = select(Item)
+        filtered = apply_filter(query, Item, 'category.name = "electronics"')
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 2
+        assert all(r.category.name == "electronics" for r in results)
+
+    def test_relationship_traversal_multiple_fields(self, rel_session):
+        """Filtering by multiple fields on same relationship should work."""
+        query = select(Item)
+        filtered = apply_filter(
+            query, Item, 'category.name = "electronics" AND category.is_active = true'
+        )
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 2
+        assert all(
+            r.category.name == "electronics" and r.category.is_active for r in results
+        )
+
+    def test_relationship_join_deduplication(self):
+        """Same relationship filtered twice should only produce one join."""
+        expr, joins = build_filter_expression(
+            Item, 'category.name = "electronics" AND category.is_active = true'
+        )
+        # Should only have one join even though we filter on two fields
+        assert len(joins) == 1
+
+    def test_relationship_with_other_filters(self, rel_session):
+        """Relationship filter combined with direct field filter should work."""
+        query = select(Item)
+        filtered = apply_filter(
+            query, Item, 'name = "Widget*" AND category.name = "electronics"'
+        )
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 2
+        assert all(r.name.startswith("Widget") for r in results)
+        assert all(r.category.name == "electronics" for r in results)
+
+    def test_invalid_relationship_field(self):
+        """Invalid field on relationship should raise error."""
+        with pytest.raises(InvalidFieldError) as exc_info:
+            build_filter_expression(Item, 'category.nonexistent = "foo"')
+        assert "nonexistent" in str(exc_info.value).lower()
+        assert "Category" in str(exc_info.value)
+
+    def test_non_relationship_field_with_dot(self):
+        """Dotted access on non-relationship should raise error."""
+        with pytest.raises(InvalidFieldError) as exc_info:
+            build_filter_expression(Item, 'name.invalid = "foo"')
+        assert "not a relationship" in str(exc_info.value).lower()
+
+    def test_unknown_relationship(self):
+        """Unknown relationship should raise error."""
+        with pytest.raises(InvalidFieldError) as exc_info:
+            build_filter_expression(Item, 'nonexistent.field = "foo"')
+        assert "nonexistent" in str(exc_info.value).lower()
+
+    def test_relationship_filter_inactive_category(self, rel_session):
+        """Should be able to filter by inactive category."""
+        query = select(Item)
+        filtered = apply_filter(query, Item, "category.is_active = false")
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 1
+        assert results[0].name == "Legacy Y"
+        assert not results[0].category.is_active
+
+
+class TestFieldAliases:
+    """Tests for field alias functionality."""
+
+    def test_field_alias_basic(self, rel_session):
+        """Basic field alias should resolve to relationship path."""
+        query = select(Item)
+        filtered = apply_filter(
+            query,
+            Item,
+            'cat = "electronics"',
+            field_aliases={"cat": "category.name"},
+        )
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 2
+        assert all(r.category.name == "electronics" for r in results)
+
+    def test_field_alias_triggers_join(self):
+        """Field alias to relationship path should trigger join."""
+        expr, joins = build_filter_expression(
+            Item,
+            'cat = "electronics"',
+            field_aliases={"cat": "category.name"},
+        )
+        assert len(joins) == 1
+
+    def test_unaliased_field_still_works(self, rel_session):
+        """Non-aliased fields should still work alongside aliases."""
+        query = select(Item)
+        filtered = apply_filter(
+            query,
+            Item,
+            'name = "Widget*" AND cat = "electronics"',
+            field_aliases={"cat": "category.name"},
+        )
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 2
+        assert all(r.name.startswith("Widget") for r in results)
+
+    def test_alias_to_direct_column(self, rel_session):
+        """Alias can map to a direct column name too."""
+        query = select(Item)
+        filtered = apply_filter(
+            query,
+            Item,
+            'title = "Widget A"',
+            field_aliases={"title": "name"},
+        )
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 1
+        assert results[0].name == "Widget A"
+
+    def test_multiple_aliases(self, rel_session):
+        """Multiple aliases should work together."""
+        query = select(Item)
+        filtered = apply_filter(
+            query,
+            Item,
+            'cat = "electronics" AND active = true',
+            field_aliases={"cat": "category.name", "active": "category.is_active"},
+        )
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 2
+
+    def test_alias_with_allowed_fields(self, rel_session):
+        """Alias name should be checked against allowed_fields."""
+        query = select(Item)
+        # "cat" is allowed, so this should work
+        filtered = apply_filter(
+            query,
+            Item,
+            'cat = "electronics"',
+            allowed_fields={"cat", "name"},
+            field_aliases={"cat": "category.name"},
+        )
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 2
+
+    def test_alias_not_in_allowed_fields_fails(self):
+        """Alias not in allowed_fields should fail."""
+        with pytest.raises(InvalidFieldError):
+            build_filter_expression(
+                Item,
+                'cat = "electronics"',
+                allowed_fields={"name"},  # "cat" not allowed
+                field_aliases={"cat": "category.name"},
+            )
+
+    def test_empty_filter_with_aliases(self, rel_session):
+        """Empty filter should work with aliases defined."""
+        query = select(Item)
+        filtered = apply_filter(
+            query,
+            Item,
+            "",
+            field_aliases={"cat": "category.name"},
+        )
+        results = rel_session.execute(filtered).scalars().all()
+        assert len(results) == 4  # All items

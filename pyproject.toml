@@ -1,24 +1,25 @@
 [project]
 name = "sqlalchemy-aip160"
 version = "0.1.1"
-description = "Add your description here"
+description = "SQLAlchemy support for AIP-160 style filters"
 readme = "README.md"
-authors = [
-    { name = "Rob Clevenger", email = "rob@robsite.org" }
-]
+authors = [{ name = "Rob Clevenger", email = "rob@robsite.org" }]
 requires-python = ">=3.13"
-dependencies = [
-    "lark>=1.3.1",
-    "sqlalchemy>=2.0.44",
-]
+dependencies = ["lark>=1.3.1", "sqlalchemy>=2.0.44"]
 
 [build-system]
 requires = ["uv_build>=0.9.10,<0.10.0"]
 build-backend = "uv_build"
 
+[project.urls]
+Homepage = "https://github.com/rcleveng/sqlalchemy_aip160"
+Issues = "https://github.com/rcleveng/sqlalchemy_aip160/issues"
+
+
 [dependency-groups]
-dev = [
-    "pytest>=9.0.1",
-    "ruff>=0.14.6",
-    "ty>=0.0.8",
-]
+dev = ["pytest>=9.0.1", "ruff>=0.14.6", "ty>=0.0.8"]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple/"
+publish-url = "https://upload.pypi.org/legacy/"

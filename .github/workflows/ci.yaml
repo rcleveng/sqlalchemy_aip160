@@ -11,8 +11,22 @@ on:
       - main
 
 jobs:
+  linters:
+    name: Linters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Run ruff check --fix
+        run: uv run ruff check --fix
+      - name: Run format --check --diff
+        run: uv run ruff format --check --diff
+      - name: Run type check
+        run: uv run ty check .
+
   tests:
-    name: Test
+    name: Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -21,14 +35,11 @@ jobs:
       - name: Install the project
         run: uv sync --locked --all-extras --dev
       - name: Run tests
-        env:
-          INSTANCE_CONNECTION_NAME: ${{ secrets.INSTANCE_CONNECTION_NAME }}
-          IAM_USER: ${{ secrets.IAM_USER }}
         run: uv run pytest
 
   publish:
     name: Publish
-    needs: tests
+    needs: [linters, tests]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:

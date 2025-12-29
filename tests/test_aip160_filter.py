@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, String, Integer, Float, Boolean, DateTime, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, synonym
 from sqlalchemy.pool import StaticPool
 
 from sqlalchemy_aip160.aip160_filter import (
@@ -34,6 +34,16 @@ class SampleModel(FilterTestBase):
     is_active: Mapped[bool] = mapped_column(Boolean)
     created_at: Mapped[datetime] = mapped_column(DateTime)
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+
+class SampleModelWithSynonym(FilterTestBase):
+    """Test model with column synonym for alias testing."""
+
+    __tablename__ = "test_items_with_synonym"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    category_name: Mapped[str] = mapped_column("category", String(50))
+    category = synonym("category_name")  # Alias
 
 
 @pytest.fixture(scope="module")
@@ -471,4 +481,53 @@ class TestAllowedFields:
                 SampleModel,
                 'status = "active"',
                 allowed_fields=set(),
+            )
+
+
+class TestSynonymSupport:
+    """Tests for SQLAlchemy synonym support."""
+
+    def test_synonym_in_column_map(self):
+        """Synonym should be included in column map."""
+        from sqlalchemy_aip160.aip160_filter import SQLAlchemyTransformer
+
+        transformer = SQLAlchemyTransformer(SampleModelWithSynonym)
+        assert "category" in transformer._column_map
+        assert "category_name" in transformer._column_map
+
+    def test_filter_by_synonym(self, session):
+        """Should be able to filter using synonym name."""
+        # Insert test data
+        item = SampleModelWithSynonym(id=100, category_name="test_cat")
+        session.add(item)
+        session.commit()
+
+        query = select(SampleModelWithSynonym)
+        filtered = apply_filter(query, SampleModelWithSynonym, 'category = "test_cat"')
+        results = session.execute(filtered).scalars().all()
+        assert len(results) == 1
+        assert results[0].category == "test_cat"
+
+    def test_filter_by_target_column(self, session):
+        """Should also be able to filter using target column name."""
+        query = select(SampleModelWithSynonym)
+        filtered = apply_filter(
+            query, SampleModelWithSynonym, 'category_name = "test_cat"'
+        )
+        results = session.execute(filtered).scalars().all()
+        assert len(results) == 1
+        assert results[0].category_name == "test_cat"
+
+    def test_synonym_respects_allowed_fields(self):
+        """Synonym should respect allowed_fields whitelist."""
+        # category allowed, should work
+        expr = build_filter_expression(
+            SampleModelWithSynonym, 'category = "foo"', allowed_fields={"category"}
+        )
+        assert expr is not None
+
+        # category not allowed, should fail
+        with pytest.raises(InvalidFieldError):
+            build_filter_expression(
+                SampleModelWithSynonym, 'category = "foo"', allowed_fields={"id"}
             )

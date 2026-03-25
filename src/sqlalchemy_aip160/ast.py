@@ -292,7 +292,9 @@ class FilterExpression:
         if other.root is None:
             return FilterExpression(root=copy.deepcopy(self.root))
         return FilterExpression(
-            root=AndExpression(children=[copy.deepcopy(self.root), copy.deepcopy(other.root)])
+            root=AndExpression(
+                children=[copy.deepcopy(self.root), copy.deepcopy(other.root)]
+            )
         )
 
     def __or__(self, other: FilterExpression) -> FilterExpression:
@@ -300,7 +302,9 @@ class FilterExpression:
             # anything OR match-all = match-all
             return FilterExpression(root=None)
         return FilterExpression(
-            root=OrExpression(children=[copy.deepcopy(self.root), copy.deepcopy(other.root)])
+            root=OrExpression(
+                children=[copy.deepcopy(self.root), copy.deepcopy(other.root)]
+            )
         )
 
     def __invert__(self) -> FilterExpression:

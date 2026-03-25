@@ -102,7 +102,6 @@ def session(engine):
 
 
 class TestApplyFilterWithExpression:
-
     def test_pass_filter_expression_directly(self, session):
         expr = parse_filter('status = "active"')
         query = apply_filter(select(Item), Item, expr)
@@ -145,7 +144,7 @@ class TestApplyFilterWithExpression:
 
     def test_combine_then_apply(self, session):
         user = parse_filter('kind = "issue"')
-        server = parse_filter('is_active = true')
+        server = parse_filter("is_active = true")
         combined = user & server
         query = apply_filter(select(Item), Item, combined)
         results = session.execute(query).scalars().all()
@@ -236,7 +235,7 @@ class TestExtractPseudoFieldPattern:
 
     def test_starred_unquoted_true(self, session):
         starred, remaining = _extract_starred_filter(
-            "starred = true AND kind = \"issue\""
+            'starred = true AND kind = "issue"'
         )
         assert starred is True
         assert remaining == 'kind = "issue"'

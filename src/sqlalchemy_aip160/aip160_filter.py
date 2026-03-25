@@ -589,7 +589,9 @@ class ASTTransformer(Transformer):
     def restriction(self, items: list) -> Any:
         field_path = items[0]
         if isinstance(field_path, str):
-            return Comparison(field=field_path, operator=Operator.HAS, value=WildcardValue())
+            return Comparison(
+                field=field_path, operator=Operator.HAS, value=WildcardValue()
+            )
         return field_path
 
     def comparison(self, items: list) -> Any:

@@ -105,7 +105,9 @@ class TestParseFilter:
         assert expr.root.field == "category.name"
 
     def test_parenthesized(self):
-        expr = parse_filter('(status = "active" OR status = "pending") AND priority > 2')
+        expr = parse_filter(
+            '(status = "active" OR status = "pending") AND priority > 2'
+        )
         assert isinstance(expr.root, AndExpression)
         assert isinstance(expr.root.children[0], OrExpression)
 
@@ -187,14 +189,18 @@ class TestSerialization:
         a = Comparison(field="a", operator=Operator.EQ, value=StringValue("1"))
         b = Comparison(field="b", operator=Operator.EQ, value=StringValue("2"))
         c = Comparison(field="c", operator=Operator.EQ, value=StringValue("3"))
-        expr = FilterExpression(root=OrExpression(children=[AndExpression(children=[a, b]), c]))
+        expr = FilterExpression(
+            root=OrExpression(children=[AndExpression(children=[a, b]), c])
+        )
         assert str(expr) == '(a = "1" AND b = "2") OR c = "3"'
 
     def test_not_composite(self):
         """NOT of composite expression should parenthesize."""
         a = Comparison(field="a", operator=Operator.EQ, value=StringValue("1"))
         b = Comparison(field="b", operator=Operator.EQ, value=StringValue("2"))
-        expr = FilterExpression(root=NotExpression(child=AndExpression(children=[a, b])))
+        expr = FilterExpression(
+            root=NotExpression(child=AndExpression(children=[a, b]))
+        )
         assert str(expr) == 'NOT (a = "1" AND b = "2")'
 
     def test_round_trip_complex(self):
@@ -228,7 +234,6 @@ class TestSerialization:
 
 
 class TestGetFields:
-
     def test_empty(self):
         assert parse_filter("").get_fields() == set()
 
@@ -262,7 +267,6 @@ class TestGetFields:
 
 
 class TestRenameField:
-
     def test_simple(self):
         expr = parse_filter('kind = "issue"')
         expr.rename_field("kind", "kind_str")
@@ -306,7 +310,6 @@ class TestRenameField:
 
 
 class TestRemove:
-
     def test_single_clause(self):
         expr = parse_filter('status = "active"')
         expr.remove("status")
@@ -375,7 +378,9 @@ class TestRemove:
         expr.remove("priority")
         assert str(expr) == 'kind = "acc:issue" AND source_id = "abc"'
 
-        expr2 = parse_filter('priority > 3 AND kind = "acc:issue" AND source_id = "abc"')
+        expr2 = parse_filter(
+            'priority > 3 AND kind = "acc:issue" AND source_id = "abc"'
+        )
         expr2.remove("priority")
         assert str(expr2) == 'kind = "acc:issue" AND source_id = "abc"'
 
@@ -386,7 +391,6 @@ class TestRemove:
 
 
 class TestExtract:
-
     def test_extract_single(self):
         expr = parse_filter('label = "safety" AND status = "active"')
         extracted = expr.extract("label")
@@ -448,7 +452,6 @@ class TestExtract:
 
 
 class TestCombining:
-
     def test_and(self):
         a = parse_filter('status = "active"')
         b = parse_filter("priority > 3")
@@ -505,7 +508,7 @@ class TestCombining:
 
     def test_and_nodes_are_independent_copies(self):
         a = parse_filter('status = "active"')
-        b = parse_filter('priority > 3')
+        b = parse_filter("priority > 3")
         combined = a & b
         # Mutating original expression should not affect combined
         a.rename_field("status", "state")
@@ -527,7 +530,7 @@ class TestCombining:
         assert str(inverted) == 'NOT status = "active"'
 
     def test_and_with_empty_left_is_independent_copy(self):
-        a = parse_filter('')
+        a = parse_filter("")
         b = parse_filter('status = "active"')
         combined = a & b
         b.rename_field("status", "state")
@@ -535,7 +538,7 @@ class TestCombining:
 
     def test_and_with_empty_right_is_independent_copy(self):
         a = parse_filter('status = "active"')
-        b = parse_filter('')
+        b = parse_filter("")
         combined = a & b
         a.rename_field("status", "state")
         assert str(combined) == 'status = "active"'
@@ -547,7 +550,6 @@ class TestCombining:
 
 
 class TestFilterBuilder:
-
     def test_single_comparison(self):
         f = FilterBuilder().add("kind", "=", "issue")
         assert str(f) == 'kind = "issue"'
@@ -560,10 +562,7 @@ class TestFilterBuilder:
 
     def test_fluent(self):
         result = str(
-            FilterBuilder()
-            .add("a", "=", "1")
-            .add("b", ">", 3)
-            .add("c", "<=", 5.5)
+            FilterBuilder().add("a", "=", "1").add("b", ">", 3).add("c", "<=", 5.5)
         )
         assert result == 'a = "1" AND b > 3 AND c <= 5.5'
 
@@ -600,7 +599,9 @@ class TestFilterBuilder:
         expr1 = builder.build()
         expr1.rename_field("a", "b")
         expr2 = builder.build()
-        assert str(expr2) == 'a = "x"', "Builder state should not be affected by mutations"
+        assert str(expr2) == 'a = "x"', (
+            "Builder state should not be affected by mutations"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -609,7 +610,6 @@ class TestFilterBuilder:
 
 
 class TestIntegrationNoDB:
-
     def test_extract_labels_example(self):
         """The motivating example from the issue."""
         expr = parse_filter('label = "safety" AND status = "active" AND label = "cost"')

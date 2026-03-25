@@ -66,9 +66,7 @@ class FilterBuilder:
         copies = [copy.deepcopy(c) for c in self._comparisons]
         if len(copies) == 1:
             return FilterExpression(root=copies[0])
-        return FilterExpression(
-            root=AndExpression(children=copies)
-        )
+        return FilterExpression(root=AndExpression(children=copies))
 
     def __str__(self) -> str:
         return str(self.build())

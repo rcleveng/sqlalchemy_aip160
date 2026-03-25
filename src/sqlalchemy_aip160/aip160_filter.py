@@ -33,6 +33,18 @@ from lark.exceptions import LarkError, VisitError
 from sqlalchemy import Select, and_, inspect, not_, or_
 from sqlalchemy.orm import InstrumentedAttribute
 
+from .ast import (
+    AndExpression,
+    Comparison,
+    FilterExpression,
+    NotExpression,
+    NumberValue,
+    Operator,
+    OrExpression,
+    StringValue,
+    WildcardValue,
+)
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -528,18 +540,8 @@ class SQLAlchemyTransformer(Transformer):
         return "*"
 
 
-def parse_filter(filter_string: str | None) -> Any:
-    """Parse an AIP-160 filter string into a parse tree.
-
-    Args:
-        filter_string: The filter string to parse.
-
-    Returns:
-        The parsed tree.
-
-    Raises:
-        FilterError: If the filter string is invalid.
-    """
+def _parse_lark_tree(filter_string: str | None) -> Any:
+    """Parse an AIP-160 filter string into a Lark parse tree (internal)."""
     if not filter_string or not filter_string.strip():
         return None
 
@@ -548,6 +550,163 @@ def parse_filter(filter_string: str | None) -> Any:
         return parser.parse(filter_string)
     except LarkError as e:
         raise FilterError(f"Invalid filter syntax: {e}") from e
+
+
+class ASTTransformer(Transformer):
+    """Transforms a Lark parse tree into :class:`FilterExpression` AST nodes."""
+
+    def filter(self, items: list) -> Any:
+        if not items:
+            return None
+        return items[0]
+
+    def expression(self, items: list) -> Any:
+        exprs = [i for i in items if not isinstance(i, str)]
+        if len(exprs) == 1:
+            return exprs[0]
+        return AndExpression(children=exprs)
+
+    def sequence(self, items: list) -> Any:
+        if len(items) == 1:
+            return items[0]
+        return AndExpression(children=list(items))
+
+    def factor(self, items: list) -> Any:
+        exprs = [i for i in items if not isinstance(i, str)]
+        if len(exprs) == 1:
+            return exprs[0]
+        return OrExpression(children=exprs)
+
+    def not_term(self, items: list) -> Any:
+        return NotExpression(child=items[-1])
+
+    def term(self, items: list) -> Any:
+        return items[0]
+
+    def simple(self, items: list) -> Any:
+        return items[0]
+
+    def restriction(self, items: list) -> Any:
+        field_path = items[0]
+        if isinstance(field_path, str):
+            # Keep semantics consistent with SQLAlchemyTransformer.restriction:
+            # bare field references (e.g. "active") are not valid filters.
+            raise FilterError(
+                f"Bare field reference '{field_path}' is not a valid filter. "
+                "Use an explicit comparison, e.g. field = value or field : *."
+            )
+        return field_path
+
+    def comparison(self, items: list) -> Any:
+        field_path, op, value = items[0], items[1], items[2]
+        return Comparison(field=field_path, operator=op, value=value)
+
+    def comparable(self, items: list) -> Any:
+        return items[0]
+
+    def member(self, items: list) -> str:
+        return ".".join(str(i) for i in items)
+
+    def function(self, items: list) -> Any:
+        func_parts = [str(i) for i in items if isinstance(i, str)]
+        func_name = ".".join(func_parts) if func_parts else "unknown"
+        raise FilterError(
+            f"Function '{func_name}' is not supported. "
+            "Use standard comparison operators."
+        )
+
+    def arglist(self, items: list) -> list:
+        return list(items)
+
+    def arg(self, items: list) -> Any:
+        item = items[0]
+        # When an arg is a comparable/member (e.g. bare identifiers like `true`),
+        # it arrives as a plain string.  Wrap it as a StringValue.
+        if isinstance(item, str):
+            return StringValue(value=item)
+        return item
+
+    def composite(self, items: list) -> Any:
+        return items[0]
+
+    # Operator handlers — return Operator enum
+    def op_eq(self, items: list) -> Operator:
+        return Operator.EQ
+
+    def op_ne(self, items: list) -> Operator:
+        return Operator.NE
+
+    def op_lt(self, items: list) -> Operator:
+        return Operator.LT
+
+    def op_gt(self, items: list) -> Operator:
+        return Operator.GT
+
+    def op_le(self, items: list) -> Operator:
+        return Operator.LE
+
+    def op_ge(self, items: list) -> Operator:
+        return Operator.GE
+
+    def op_has(self, items: list) -> Operator:
+        return Operator.HAS
+
+    # Terminal handlers
+    def NAME(self, token: Any) -> str:
+        return str(token)
+
+    def STRING(self, token: Any) -> StringValue:
+        s = str(token)
+        quote = s[0]
+        inner = s[1:-1]
+        inner = inner.replace('\\"', '"').replace("\\'", "'").replace("\\\\", "\\")
+        return StringValue(value=inner, quote_char=quote)
+
+    def NUMBER(self, token: Any) -> NumberValue:
+        s = str(token)
+        if "." in s or "e" in s.lower():
+            return NumberValue(value=float(s))
+        return NumberValue(value=int(s))
+
+    def NOT(self, token: Any) -> str:
+        return "NOT"
+
+    def AND(self, token: Any) -> str:
+        return "AND"
+
+    def OR(self, token: Any) -> str:
+        return "OR"
+
+    def MINUS(self, token: Any) -> str:
+        return "-"
+
+    def STAR(self, token: Any) -> WildcardValue:
+        return WildcardValue()
+
+
+def parse_filter(filter_string: str | None) -> FilterExpression:
+    """Parse an AIP-160 filter string into a structured :class:`FilterExpression`.
+
+    Args:
+        filter_string: The filter string to parse.
+
+    Returns:
+        A :class:`FilterExpression` that can be inspected, manipulated,
+        serialized back to a string, or passed directly to :func:`apply_filter`.
+
+    Raises:
+        FilterError: If the filter string is invalid.
+    """
+    tree = _parse_lark_tree(filter_string)
+    if tree is None:
+        return FilterExpression(root=None)
+    try:
+        root = ASTTransformer().transform(tree)
+    except VisitError as e:
+        if e.orig_exc is not None:
+            raise e.orig_exc from None
+        raise FilterError(str(e)) from e
+    return FilterExpression(root=root)
 
 
 def build_filter_expression(
@@ -576,7 +735,7 @@ def build_filter_expression(
         FilterError: If the filter string is invalid.
         InvalidFieldError: If a filter references an invalid field.
     """
-    tree = parse_filter(filter_string)
+    tree = _parse_lark_tree(filter_string)
     if tree is None:
         return True, []  # Empty filter matches everything
 
@@ -595,7 +754,7 @@ def build_filter_expression(
 def apply_filter(
     query: Select[tuple[T]],
     model_class: type[T],
-    filter_string: str | None,
+    filter_string: str | FilterExpression | None,
     allowed_fields: set[str] | None = None,
     field_aliases: dict[str, str] | None = None,
 ) -> Select[tuple[T]]:
@@ -604,8 +763,8 @@ def apply_filter(
     Args:
         query: The SQLAlchemy query to filter.
         model_class: The SQLAlchemy model class being queried.
-        filter_string: The AIP-160 filter string. If None or empty, returns
-                      the query unchanged.
+        filter_string: The AIP-160 filter string, a :class:`FilterExpression`,
+                      or ``None``. If None or empty, returns the query unchanged.
         allowed_fields: Optional set of field names that are allowed in filters.
                        If None, all model columns are allowed.
         field_aliases: Optional mapping of alias names to actual field paths.
@@ -639,7 +798,15 @@ def apply_filter(
         ...     'department = "Engineering"',
         ...     field_aliases={"department": "department.name"}
         ... )
+
+        # With a FilterExpression:
+        >>> expr = parse_filter('status = "active"')
+        >>> expr.rename_field("status", "state")
+        >>> filtered = apply_filter(query, User, expr)
     """
+    if isinstance(filter_string, FilterExpression):
+        filter_string = str(filter_string)
+
     if not filter_string or not filter_string.strip():
         return query
 

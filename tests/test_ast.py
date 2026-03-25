@@ -503,6 +503,43 @@ class TestCombining:
         assert isinstance(combined.root, AndExpression)
         assert len(combined.root.children) == 3
 
+    def test_and_nodes_are_independent_copies(self):
+        a = parse_filter('status = "active"')
+        b = parse_filter('priority > 3')
+        combined = a & b
+        # Mutating original expression should not affect combined
+        a.rename_field("status", "state")
+        assert str(combined) == 'status = "active" AND priority > 3'
+
+    def test_or_nodes_are_independent_copies(self):
+        a = parse_filter('status = "active"')
+        b = parse_filter('status = "pending"')
+        combined = a | b
+        # Mutating original expression should not affect combined
+        a.rename_field("status", "state")
+        assert str(combined) == 'status = "active" OR status = "pending"'
+
+    def test_invert_node_is_independent_copy(self):
+        a = parse_filter('status = "active"')
+        inverted = ~a
+        # Mutating original expression should not affect inverted
+        a.rename_field("status", "state")
+        assert str(inverted) == 'NOT status = "active"'
+
+    def test_and_with_empty_left_is_independent_copy(self):
+        a = parse_filter('')
+        b = parse_filter('status = "active"')
+        combined = a & b
+        b.rename_field("status", "state")
+        assert str(combined) == 'status = "active"'
+
+    def test_and_with_empty_right_is_independent_copy(self):
+        a = parse_filter('status = "active"')
+        b = parse_filter('')
+        combined = a & b
+        a.rename_field("status", "state")
+        assert str(combined) == 'status = "active"'
+
 
 # ---------------------------------------------------------------------------
 # FilterBuilder

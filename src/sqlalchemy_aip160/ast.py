@@ -6,6 +6,7 @@ inspected, manipulated, serialized back to strings, and combined.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from enum import Enum
 from typing import Union
@@ -287,18 +288,22 @@ class FilterExpression:
 
     def __and__(self, other: FilterExpression) -> FilterExpression:
         if self.root is None:
-            return FilterExpression(root=other.root)
+            return FilterExpression(root=copy.deepcopy(other.root))
         if other.root is None:
-            return FilterExpression(root=self.root)
-        return FilterExpression(root=AndExpression(children=[self.root, other.root]))
+            return FilterExpression(root=copy.deepcopy(self.root))
+        return FilterExpression(
+            root=AndExpression(children=[copy.deepcopy(self.root), copy.deepcopy(other.root)])
+        )
 
     def __or__(self, other: FilterExpression) -> FilterExpression:
         if self.root is None or other.root is None:
             # anything OR match-all = match-all
             return FilterExpression(root=None)
-        return FilterExpression(root=OrExpression(children=[self.root, other.root]))
+        return FilterExpression(
+            root=OrExpression(children=[copy.deepcopy(self.root), copy.deepcopy(other.root)])
+        )
 
     def __invert__(self) -> FilterExpression:
         if self.root is None:
             return FilterExpression(root=None)
-        return FilterExpression(root=NotExpression(child=self.root))
+        return FilterExpression(root=NotExpression(child=copy.deepcopy(self.root)))

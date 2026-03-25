@@ -1,6 +1,6 @@
 [project]
 name = "sqlalchemy-aip160"
-version = "0.1.4"
+version = "0.1.5"
 description = "SQLAlchemy support for AIP-160 style filters"
 readme = "README.md"
 authors = [{ name = "Rob Clevenger", email = "rob@robsite.org" }]

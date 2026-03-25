@@ -309,5 +309,5 @@ class FilterExpression:
 
     def __invert__(self) -> FilterExpression:
         if self.root is None:
-            return FilterExpression(root=None)
+            raise ValueError("Cannot negate an empty (match-all) FilterExpression")
         return FilterExpression(root=NotExpression(child=copy.deepcopy(self.root)))

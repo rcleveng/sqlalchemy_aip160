@@ -589,8 +589,11 @@ class ASTTransformer(Transformer):
     def restriction(self, items: list) -> Any:
         field_path = items[0]
         if isinstance(field_path, str):
-            return Comparison(
-                field=field_path, operator=Operator.HAS, value=WildcardValue()
+            # Keep semantics consistent with SQLAlchemyTransformer.restriction:
+            # bare field references (e.g. "active") are not valid filters.
+            raise FilterError(
+                f"Bare field reference '{field_path}' is not a valid filter. "
+                "Use an explicit comparison, e.g. field = value or field : *."
             )
         return field_path
 

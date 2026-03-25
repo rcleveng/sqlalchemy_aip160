@@ -781,6 +781,19 @@ def apply_filter(
         ...     'status = "active" AND created_at > "2024-01-01"'
         ... )
 
+        # With relationship filtering:
+        >>> filtered = apply_filter(
+        ...     query, User,
+        ...     'department.name = "Engineering"'
+        ... )
+
+        # With field aliases:
+        >>> filtered = apply_filter(
+        ...     query, User,
+        ...     'department = "Engineering"',
+        ...     field_aliases={"department": "department.name"}
+        ... )
+
         # With a FilterExpression:
         >>> expr = parse_filter('status = "active"')
         >>> expr.rename_field("status", "state")

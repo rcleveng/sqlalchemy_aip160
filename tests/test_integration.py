@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from sqlalchemy_aip160 import (
     FilterBuilder,
+    StringValue,
     apply_filter,
     parse_filter,
 )
@@ -129,6 +130,7 @@ class TestApplyFilterWithExpression:
         expr = parse_filter('label = "safety" AND status = "active"')
         labels = expr.extract("label")
         assert len(labels) == 1
+        assert isinstance(labels[0].value, StringValue)
         assert labels[0].value.value == "safety"
         # Remaining filter: status = "active"
         query = apply_filter(select(Item), Item, expr)
@@ -202,7 +204,9 @@ def _extract_starred_filter(
     if not clauses:
         return None, filter_expr
 
-    starred_value = clauses[0].value.value.lower() == "true"
+    val = clauses[0].value
+    assert isinstance(val, StringValue)
+    starred_value = val.value.lower() == "true"
     remaining = str(expr) or None
 
     return starred_value, remaining
@@ -296,7 +300,9 @@ class TestExtractPseudoFieldPattern:
         labels = expr.extract("label")
         starred_clauses = expr.extract("starred")
 
-        assert [c.value.value for c in labels] == ["safety"]
+        assert all(isinstance(c.value, StringValue) for c in labels)
+        assert [c.value.value for c in labels if isinstance(c.value, StringValue)] == ["safety"]
+        assert isinstance(starred_clauses[0].value, StringValue)
         assert starred_clauses[0].value.value.lower() == "true"
         assert str(expr) == 'status = "active"'
 

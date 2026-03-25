@@ -129,7 +129,7 @@ def _serialize_node(node: FilterNode, parent_type: type | None = None) -> str:
     if isinstance(node, AndExpression):
         parts = [_serialize_node(c, AndExpression) for c in node.children]
         result = " AND ".join(parts)
-        # AND inside OR needs parentheses (AND is lower precedence in AIP-160)
+        # AND inside OR needs parens to preserve semantics
         if parent_type is OrExpression:
             return f"({result})"
         return result
@@ -137,7 +137,12 @@ def _serialize_node(node: FilterNode, parent_type: type | None = None) -> str:
     if isinstance(node, OrExpression):
         parts = [_serialize_node(c, OrExpression) for c in node.children]
         result = " OR ".join(parts)
-        # OR inside AND does NOT need parens (OR is higher precedence)
+        # OR inside AND doesn't strictly need parens in AIP-160, but adding for clarity
+        # AIP-160 states:
+        # "API documentation and examples should encourage the use of explicit
+        # parentheses to avoid confusion, but should not require explicit parentheses."
+        if parent_type is AndExpression:
+            return f"({result})"
         return result
 
     if isinstance(node, NotExpression):

@@ -72,6 +72,7 @@ class TestParseFilter:
         }
         for sym, op_enum in ops.items():
             expr = parse_filter(f"field {sym} 5")
+            assert isinstance(expr.root, Comparison)
             assert expr.root.operator == op_enum, f"Failed for {sym}"
 
     def test_and_expression(self):
@@ -118,6 +119,7 @@ class TestParseFilter:
     def test_single_quotes(self):
         expr = parse_filter("status = 'active'")
         assert isinstance(expr.root, Comparison)
+        assert isinstance(expr.root.value, StringValue)
         assert expr.root.value.value == "active"
         assert expr.root.value.quote_char == "'"
 
@@ -176,12 +178,12 @@ class TestSerialization:
         assert str(expr) == 'category.name = "electronics"'
 
     def test_parenthesized_or_inside_and(self):
-        """OR inside AND doesn't need parens in AIP-160 (OR has higher prec)."""
+        """OR inside AND emits parens for clarity (even though OR has higher prec)."""
         expr = parse_filter('status = "active" AND a = "1" OR b = "2"')
         # OR has higher precedence, so the parse tree is:
         # AND(status="active", OR(a="1", b="2"))
         serialized = str(expr)
-        assert 'status = "active" AND a = "1" OR b = "2"' == serialized
+        assert serialized == 'status = "active" AND (a = "1" OR b = "2")'
 
     def test_parenthesized_and_inside_or(self):
         """AND inside OR needs parens to preserve semantics."""
@@ -276,6 +278,8 @@ class TestRenameField:
         expr = parse_filter('kind = "mankind"')
         expr.rename_field("kind", "kind_str")
         assert str(expr) == 'kind_str = "mankind"'
+        assert isinstance(expr.root, Comparison)
+        assert isinstance(expr.root.value, StringValue)
         assert expr.root.value.value == "mankind"
 
     def test_dotted_prefix(self):
@@ -396,6 +400,7 @@ class TestExtract:
         extracted = expr.extract("label")
         assert len(extracted) == 1
         assert extracted[0].field == "label"
+        assert isinstance(extracted[0].value, StringValue)
         assert extracted[0].value.value == "safety"
         assert str(expr) == 'status = "active"'
 
@@ -403,7 +408,10 @@ class TestExtract:
         expr = parse_filter('label = "safety" AND status = "active" AND label = "cost"')
         extracted = expr.extract("label")
         assert len(extracted) == 2
-        assert [c.value.value for c in extracted] == ["safety", "cost"]
+        assert all(isinstance(c.value, StringValue) for c in extracted)
+        assert [
+            c.value.value for c in extracted if isinstance(c.value, StringValue)
+        ] == ["safety", "cost"]
         assert str(expr) == 'status = "active"'
 
     def test_extract_all(self):
@@ -438,6 +446,7 @@ class TestExtract:
         """Example from issue: extract kind, change value, re-combine."""
         expr = parse_filter('kind = "acc:issue" AND source_id = "abc"')
         kind_clauses = expr.extract("kind")
+        assert isinstance(kind_clauses[0].value, StringValue)
         assert kind_clauses[0].value.value == "acc:issue"
 
         replacement = FilterBuilder().add("kind", "=", "acc:meeting").build()
@@ -615,7 +624,11 @@ class TestIntegrationNoDB:
         """The motivating example from the issue."""
         expr = parse_filter('label = "safety" AND status = "active" AND label = "cost"')
         labels = expr.extract("label")
-        assert [c.value.value for c in labels] == ["safety", "cost"]
+        assert all(isinstance(c.value, StringValue) for c in labels)
+        assert [c.value.value for c in labels if isinstance(c.value, StringValue)] == [
+            "safety",
+            "cost",
+        ]
         assert str(expr) == 'status = "active"'
 
     def test_rename_kind_example(self):

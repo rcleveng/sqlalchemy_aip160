@@ -8,6 +8,7 @@ from .ast import (
     AndExpression,
     Comparison,
     FilterExpression,
+    FilterNode,
     NumberValue,
     Operator,
     StringValue,
@@ -63,7 +64,7 @@ class FilterBuilder:
         """Build and return a :class:`FilterExpression`."""
         if not self._comparisons:
             return FilterExpression(root=None)
-        copies = [copy.deepcopy(c) for c in self._comparisons]
+        copies: list[FilterNode] = [copy.deepcopy(c) for c in self._comparisons]
         if len(copies) == 1:
             return FilterExpression(root=copies[0])
         return FilterExpression(root=AndExpression(children=copies))

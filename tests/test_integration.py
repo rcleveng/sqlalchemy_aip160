@@ -176,3 +176,131 @@ class TestApplyFilterWithExpression:
         assert len(results) == 2
         assert all(r.kind == "meeting" for r in results)
         assert all(r.priority > 1 for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Real-world pattern: extract pseudo-field, use its value, apply remainder
+# ---------------------------------------------------------------------------
+
+
+def _extract_starred_filter(
+    filter_expr: str | None,
+) -> tuple[bool | None, str | None]:
+    """Extract ``starred=true/false`` from an AIP-160 filter string.
+
+    This mirrors the real-world helper that replaces fragile regex extraction.
+
+    Returns:
+        (starred_value, remaining_filter)
+    """
+    if not filter_expr:
+        return None, filter_expr
+
+    expr = parse_filter(filter_expr)
+    clauses = expr.extract("starred")
+
+    if not clauses:
+        return None, filter_expr
+
+    starred_value = clauses[0].value.value.lower() == "true"
+    remaining = str(expr) or None
+
+    return starred_value, remaining
+
+
+class TestExtractPseudoFieldPattern:
+    """Tests that mirror real usage: extract a pseudo-field boolean,
+    then apply the remaining filter to a DB query."""
+
+    def test_starred_true_with_other_clauses(self, session):
+        starred, remaining = _extract_starred_filter(
+            'starred = "true" AND status = "active"'
+        )
+        assert starred is True
+        assert remaining == 'status = "active"'
+        query = apply_filter(select(Item), Item, remaining)
+        results = session.execute(query).scalars().all()
+        assert len(results) == 2
+        assert all(r.status == "active" for r in results)
+
+    def test_starred_false_with_other_clauses(self, session):
+        starred, remaining = _extract_starred_filter(
+            'status = "active" AND starred = "false" AND priority > 1'
+        )
+        assert starred is False
+        assert remaining == 'status = "active" AND priority > 1'
+        query = apply_filter(select(Item), Item, remaining)
+        results = session.execute(query).scalars().all()
+        assert len(results) == 1
+        assert results[0].priority > 1
+
+    def test_starred_unquoted_true(self, session):
+        starred, remaining = _extract_starred_filter(
+            "starred = true AND kind = \"issue\""
+        )
+        assert starred is True
+        assert remaining == 'kind = "issue"'
+        query = apply_filter(select(Item), Item, remaining)
+        results = session.execute(query).scalars().all()
+        assert all(r.kind == "issue" for r in results)
+
+    def test_starred_only(self, session):
+        starred, remaining = _extract_starred_filter('starred = "true"')
+        assert starred is True
+        assert remaining is None
+        # None remaining → return all rows
+        query = apply_filter(select(Item), Item, remaining)
+        results = session.execute(query).scalars().all()
+        assert len(results) == 4
+
+    def test_no_starred(self, session):
+        starred, remaining = _extract_starred_filter('status = "active"')
+        assert starred is None
+        assert remaining == 'status = "active"'
+        query = apply_filter(select(Item), Item, remaining)
+        results = session.execute(query).scalars().all()
+        assert len(results) == 2
+
+    def test_none_input(self):
+        starred, remaining = _extract_starred_filter(None)
+        assert starred is None
+        assert remaining is None
+
+    def test_empty_input(self):
+        starred, remaining = _extract_starred_filter("")
+        assert starred is None
+        assert remaining == ""
+
+    def test_starred_at_start(self, session):
+        starred, remaining = _extract_starred_filter(
+            'starred = "false" AND kind = "meeting" AND priority > 1'
+        )
+        assert starred is False
+        assert remaining == 'kind = "meeting" AND priority > 1'
+        query = apply_filter(select(Item), Item, remaining)
+        results = session.execute(query).scalars().all()
+        assert all(r.kind == "meeting" and r.priority > 1 for r in results)
+
+    def test_starred_at_end(self, session):
+        starred, remaining = _extract_starred_filter(
+            'kind = "issue" AND priority > 1 AND starred = "true"'
+        )
+        assert starred is True
+        assert remaining == 'kind = "issue" AND priority > 1'
+
+    def test_multiple_pseudo_fields(self, session):
+        """Extract label AND starred from same filter, apply remainder."""
+        filter_str = 'label = "safety" AND starred = "true" AND status = "active"'
+        expr = parse_filter(filter_str)
+
+        labels = expr.extract("label")
+        starred_clauses = expr.extract("starred")
+
+        assert [c.value.value for c in labels] == ["safety"]
+        assert starred_clauses[0].value.value.lower() == "true"
+        assert str(expr) == 'status = "active"'
+
+        query = apply_filter(select(Item), Item, expr)
+        results = session.execute(query).scalars().all()
+        assert len(results) == 2
+        assert all(r.status == "active" for r in results)

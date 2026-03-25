@@ -150,8 +150,8 @@ def session(engine, sample_data):
     session.close()
 
 
-class TestParseFilter:
-    """Tests for filter parsing."""
+class TestParseLarkTree:
+    """Tests for the internal _parse_lark_tree() helper."""
 
     def test_parse_empty_filter(self):
         """Empty filter should parse to None."""

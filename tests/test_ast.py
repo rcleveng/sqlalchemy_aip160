@@ -492,7 +492,8 @@ class TestCombining:
 
     def test_invert_empty(self):
         a = parse_filter("")
-        assert (~a).root is None
+        with pytest.raises(ValueError, match="Cannot negate an empty"):
+            ~a
 
     def test_bool(self):
         assert bool(parse_filter('status = "active"')) is True

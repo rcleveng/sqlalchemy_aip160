@@ -19,7 +19,7 @@ from sqlalchemy.pool import StaticPool
 from sqlalchemy_aip160.aip160_filter import (
     apply_filter,
     build_filter_expression,
-    parse_filter,
+    _parse_lark_tree,
     FilterError,
     InvalidFieldError,
 )
@@ -155,41 +155,41 @@ class TestParseFilter:
 
     def test_parse_empty_filter(self):
         """Empty filter should parse to None."""
-        assert parse_filter("") is None
-        assert parse_filter("   ") is None
-        assert parse_filter(None) is None
+        assert _parse_lark_tree("") is None
+        assert _parse_lark_tree("   ") is None
+        assert _parse_lark_tree(None) is None
 
     def test_parse_simple_equality(self):
         """Simple equality should parse."""
-        tree = parse_filter('status = "active"')
+        tree = _parse_lark_tree('status = "active"')
         assert tree is not None
 
     def test_parse_comparison_operators(self):
         """All comparison operators should parse."""
         operators = ["=", "!=", "<", ">", "<=", ">=", ":"]
         for op in operators:
-            tree = parse_filter(f"priority {op} 5")
+            tree = _parse_lark_tree(f"priority {op} 5")
             assert tree is not None, f"Operator {op} failed to parse"
 
     def test_parse_logical_operators(self):
         """Logical operators should parse."""
-        tree = parse_filter('status = "active" AND priority > 3')
+        tree = _parse_lark_tree('status = "active" AND priority > 3')
         assert tree is not None
 
-        tree = parse_filter('status = "active" OR priority > 3')
+        tree = _parse_lark_tree('status = "active" OR priority > 3')
         assert tree is not None
 
     def test_parse_not_operator(self):
         """NOT operator should parse."""
-        tree = parse_filter('NOT status = "active"')
+        tree = _parse_lark_tree('NOT status = "active"')
         assert tree is not None
 
-        tree = parse_filter('-status = "active"')
+        tree = _parse_lark_tree('-status = "active"')
         assert tree is not None
 
     def test_parse_parentheses(self):
         """Parenthesized expressions should parse."""
-        tree = parse_filter(
+        tree = _parse_lark_tree(
             '(status = "active" OR status = "pending") AND priority > 2'
         )
         assert tree is not None
@@ -197,10 +197,10 @@ class TestParseFilter:
     def test_parse_invalid_syntax(self):
         """Invalid syntax should raise FilterError."""
         with pytest.raises(FilterError):
-            parse_filter("status ==== active")
+            _parse_lark_tree("status ==== active")
 
         with pytest.raises(FilterError):
-            parse_filter("(status = active")
+            _parse_lark_tree("(status = active")
 
 
 class TestBuildFilterExpression:

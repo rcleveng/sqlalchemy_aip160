@@ -301,7 +301,9 @@ class TestExtractPseudoFieldPattern:
         starred_clauses = expr.extract("starred")
 
         assert all(isinstance(c.value, StringValue) for c in labels)
-        assert [c.value.value for c in labels if isinstance(c.value, StringValue)] == ["safety"]
+        assert [c.value.value for c in labels if isinstance(c.value, StringValue)] == [
+            "safety"
+        ]
         assert isinstance(starred_clauses[0].value, StringValue)
         assert starred_clauses[0].value.value.lower() == "true"
         assert str(expr) == 'status = "active"'

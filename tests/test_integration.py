@@ -1,9 +1,7 @@
 """Integration tests: parse → manipulate → apply_filter with real DB queries."""
 
-from datetime import datetime, timezone
-
 import pytest
-from sqlalchemy import Integer, String, Float, Boolean, DateTime, create_engine, select
+from sqlalchemy import Integer, String, Float, Boolean, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -42,16 +40,54 @@ def engine():
     Base.metadata.create_all(eng)
     Session = sessionmaker(bind=eng)
     s = Session()
-    s.add_all([
-        Item(id=1, name="A", kind="issue", kind_str="issue", status="active",
-             priority=1, score=4.5, is_active=True, label="safety"),
-        Item(id=2, name="B", kind="meeting", kind_str="meeting", status="active",
-             priority=3, score=3.0, is_active=True, label="cost"),
-        Item(id=3, name="C", kind="issue", kind_str="issue", status="inactive",
-             priority=5, score=5.0, is_active=False, label=None),
-        Item(id=4, name="D", kind="meeting", kind_str="meeting", status="pending",
-             priority=2, score=2.5, is_active=True, label="safety"),
-    ])
+    s.add_all(
+        [
+            Item(
+                id=1,
+                name="A",
+                kind="issue",
+                kind_str="issue",
+                status="active",
+                priority=1,
+                score=4.5,
+                is_active=True,
+                label="safety",
+            ),
+            Item(
+                id=2,
+                name="B",
+                kind="meeting",
+                kind_str="meeting",
+                status="active",
+                priority=3,
+                score=3.0,
+                is_active=True,
+                label="cost",
+            ),
+            Item(
+                id=3,
+                name="C",
+                kind="issue",
+                kind_str="issue",
+                status="inactive",
+                priority=5,
+                score=5.0,
+                is_active=False,
+                label=None,
+            ),
+            Item(
+                id=4,
+                name="D",
+                kind="meeting",
+                kind_str="meeting",
+                status="pending",
+                priority=2,
+                score=2.5,
+                is_active=True,
+                label="safety",
+            ),
+        ]
+    )
     s.commit()
     s.close()
     return eng

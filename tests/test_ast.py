@@ -594,6 +594,14 @@ class TestFilterBuilder:
         assert 'status = "active"' in str(combined)
         assert 'org_id = "org-123"' in str(combined)
 
+    def test_build_is_independent_copy(self):
+        """Build returns independent copies so mutating doesn't corrupt the builder."""
+        builder = FilterBuilder().add("a", "=", "x")
+        expr1 = builder.build()
+        expr1.rename_field("a", "b")
+        expr2 = builder.build()
+        assert str(expr2) == 'a = "x"', "Builder state should not be affected by mutations"
+
 
 # ---------------------------------------------------------------------------
 # Integration: parse → manipulate → serialize (no DB needed)

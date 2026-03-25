@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 from .ast import (
     AndExpression,
     Comparison,
@@ -61,10 +63,11 @@ class FilterBuilder:
         """Build and return a :class:`FilterExpression`."""
         if not self._comparisons:
             return FilterExpression(root=None)
-        if len(self._comparisons) == 1:
-            return FilterExpression(root=self._comparisons[0])
+        copies = [copy.deepcopy(c) for c in self._comparisons]
+        if len(copies) == 1:
+            return FilterExpression(root=copies[0])
         return FilterExpression(
-            root=AndExpression(children=list(self._comparisons))
+            root=AndExpression(children=copies)
         )
 
     def __str__(self) -> str:

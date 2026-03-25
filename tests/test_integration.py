@@ -128,6 +128,7 @@ class TestApplyFilterWithExpression:
     def test_extract_and_apply_remainder(self, session):
         expr = parse_filter('label = "safety" AND status = "active"')
         labels = expr.extract("label")
+        assert len(labels) == 1
         assert labels[0].value.value == "safety"
         # Remaining filter: status = "active"
         query = apply_filter(select(Item), Item, expr)
